@@ -1,0 +1,300 @@
+{
+  "name": "Asset Production Pipeline - Hero Image to Multi-Channel Export",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "asset-pipeline",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nreturn [{ json: {\n  imageUrl: body.image_url || '',\n  campaignName: body.campaign_name || 'Untitled Campaign',\n  productName: body.product_name || '',\n  channels: body.channels || ['instagram_feed', 'facebook_ads', 'web_banner'],\n  brandTemplate: body.brand_template || 'default',\n  includeBleed: body.include_bleed || false,\n  notifyChannel: body.notify_channel || '#design-assets',\n  clientName: body.client_name || '',\n  exportFormat: body.export_format || 'jpg',\n  jpegQuality: body.jpeg_quality || 92\n}}];"
+      },
+      "id": "validate-input",
+      "name": "Validate & Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.imageUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "download-hero",
+      "name": "Download Hero Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=identify -format '{\"width\":%w,\"height\":%h,\"colorspace\":\"%r\",\"format\":\"%m\",\"dpi\":\"%x\",\"filesize\":\"%b\"}' /tmp/hero_image.jpg 2>/dev/null || echo '{\"error\":\"identify failed\"}'"
+      },
+      "id": "analyze-image",
+      "name": "Analyze Source Image",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const metadata = JSON.parse($input.first().json.stdout || '{}');\nconst config = $('Validate & Parse Input').first().json;\n\nconst channelSpecs = {\n  instagram_feed: [\n    { name: 'Instagram Feed Square', width: 1080, height: 1080, aspect: '1:1', format: 'jpg', colorSpace: 'sRGB', maxSize: 30 },\n    { name: 'Instagram Feed Portrait', width: 1080, height: 1350, aspect: '4:5', format: 'jpg', colorSpace: 'sRGB', maxSize: 30 }\n  ],\n  instagram_stories: [\n    { name: 'Instagram Stories', width: 1080, height: 1920, aspect: '9:16', format: 'jpg', colorSpace: 'sRGB', maxSize: 30 }\n  ],\n  facebook_ads: [\n    { name: 'Facebook Ad', width: 1200, height: 628, aspect: '1.91:1', format: 'jpg', colorSpace: 'sRGB', maxSize: 30 }\n  ],\n  web_banner: [\n    { name: 'Web Hero Banner', width: 1920, height: 600, aspect: '3.2:1', format: 'jpg', colorSpace: 'sRGB', maxSize: 2 },\n    { name: 'Web Leaderboard', width: 728, height: 90, aspect: '8:1', format: 'jpg', colorSpace: 'sRGB', maxSize: 1 }\n  ],\n  retail_pos: [\n    { name: 'Retail A3 Portrait', width: 3508, height: 4961, aspect: '3:4', format: 'tiff', colorSpace: 'CMYK', maxSize: 200, bleed: 3 },\n    { name: 'Retail A4 Portrait', width: 2480, height: 3508, aspect: '3:4', format: 'tiff', colorSpace: 'CMYK', maxSize: 150, bleed: 3 }\n  ],\n  email_header: [\n    { name: 'Email Header', width: 600, height: 300, aspect: '2:1', format: 'jpg', colorSpace: 'sRGB', maxSize: 0.2 }\n  ]\n};\n\nconst variants = [];\nconfig.channels.forEach(channel => {\n  const specs = channelSpecs[channel] || [];\n  specs.forEach(spec => {\n    const slug = config.campaignName.replace(/\\\\s+/g, '-').toLowerCase();\n    const product = config.productName.replace(/\\\\s+/g, '-').toLowerCase();\n    variants.push({\n      ...spec,\n      channel,\n      fileName: `${slug}_${product}_${channel}_${spec.width}x${spec.height}_v1.${spec.format}`,\n      campaignName: config.campaignName,\n      productName: config.productName,\n      brandTemplate: config.brandTemplate,\n      includeBleed: config.includeBleed && spec.bleed ? spec.bleed : 0,\n      sourceWidth: metadata.width,\n      sourceHeight: metadata.height\n    });\n  });\n});\n\nreturn variants.map(v => ({ json: v }));"
+      },
+      "id": "generate-variants",
+      "name": "Generate Channel Variants",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=convert /tmp/hero_image.jpg -resize {{ $json.width }}x{{ $json.height }}^ -gravity center -extent {{ $json.width }}x{{ $json.height }} -quality {{ $json.format === 'jpg' ? 92 : 100 }} {{ $json.colorSpace === 'CMYK' ? '-colorspace CMYK' : '-colorspace sRGB' }} /tmp/export_{{ $json.fileName }} 2>&1 && echo '{\"status\":\"success\",\"file\":\"/tmp/export_{{ $json.fileName }}\"}' || echo '{\"status\":\"error\"}'"
+      },
+      "id": "resize-crop",
+      "name": "Resize & Crop",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = JSON.parse($input.first().json.stdout || '{}');\nconst variant = $('Generate Channel Variants').item;\n\nreturn [{ json: {\n  ...variant.json,\n  exportStatus: result.status || 'error',\n  exportPath: result.file || '',\n  exportedAt: new Date().toISOString()\n}}];"
+      },
+      "id": "validate-export",
+      "name": "Validate Export",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $credentials.assetLogSheetId }}"
+        },
+        "sheetName": "Asset Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.exportedAt.split('T')[0] }}",
+            "Campaign": "={{ $json.campaignName }}",
+            "Product": "={{ $json.productName }}",
+            "Channel": "={{ $json.channel }}",
+            "Format": "={{ $json.name }}",
+            "Size": "={{ $json.width + 'x' + $json.height }}",
+            "File Name": "={{ $json.fileName }}",
+            "Color Space": "={{ $json.colorSpace }}",
+            "Status": "={{ $json.exportStatus }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "save-to-sheets",
+      "name": "Log to Asset Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1760,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allExports = $input.all().map(i => i.json);\nconst config = $('Validate & Parse Input').first().json;\nconst successful = allExports.filter(e => e.exportStatus === 'success');\nconst failed = allExports.filter(e => e.exportStatus !== 'success');\n\nreturn [{ json: {\n  campaignName: config.campaignName,\n  productName: config.productName,\n  totalExports: allExports.length,\n  successCount: successful.length,\n  failCount: failed.length,\n  channels: [...new Set(allExports.map(e => e.channel))],\n  exports: successful.map(e => ({\n    name: e.name,\n    fileName: e.fileName,\n    size: e.width + 'x' + e.height,\n    channel: e.channel\n  })),\n  failures: failed.map(e => e.name)\n}}];"
+      },
+      "id": "build-summary",
+      "name": "Build Export Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $('Validate & Parse Input').first().json.notifyChannel }}",
+        "text": ":art: *Asset Pipeline Complete*\n\n:camera: *{{ $json.campaignName }}* — {{ $json.productName }}\n:white_check_mark: {{ $json.successCount }}/{{ $json.totalExports }} exports successful\n:file_folder: Channels: {{ $json.channels.join(', ') }}\n\n*Exports:*\n{{ $json.exports.map(e => `• ${e.name}: ${e.fileName} (${e.size})`).join('\\n') }}\n\n{{ $json.failCount > 0 ? ':warning: *Failed:*\\n' + $json.failures.map(f => '• ' + f).join('\\n') : '' }}"
+      },
+      "id": "slack-notification",
+      "name": "Notify Design Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'success', campaign: $json.campaignName, totalExports: $json.totalExports, successful: $json.successCount, exports: $json.exports }) }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate & Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Download Hero Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Hero Image": {
+      "main": [
+        [
+          {
+            "node": "Analyze Source Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Source Image": {
+      "main": [
+        [
+          {
+            "node": "Generate Channel Variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Channel Variants": {
+      "main": [
+        [
+          {
+            "node": "Resize & Crop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resize & Crop": {
+      "main": [
+        [
+          {
+            "node": "Validate Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Export": {
+      "main": [
+        [
+          {
+            "node": "Log to Asset Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Export Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Export Summary": {
+      "main": [
+        [
+          {
+            "node": "Notify Design Team",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "design"
+    },
+    {
+      "name": "image-processing"
+    },
+    {
+      "name": "multi-channel"
+    },
+    {
+      "name": "asset-pipeline"
+    },
+    {
+      "name": "automation"
+    }
+  ]
+}
